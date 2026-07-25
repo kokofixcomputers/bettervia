@@ -1,0 +1,82 @@
+# .github/workflows/deploy.yml
+name: Deploy React App to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main          # change to your default branch if different
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm       # or 'yarn' / 'pnpm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # Vite: set base to './' so asset URLs are relative.
+          # CRA: set this to '.' in your package.json homepage instead.
+          # Comment out if already set in vite.config.ts / package.json.
+          PUBLIC_URL: ./
+
+      # ── PATH REWRITE ──────────────────────────────────────────────────
+      # Rewrites absolute asset paths  (/js/... /css/... /assets/...)
+      # to relative ones              (js/...  css/...  assets/...)
+      # inside every .html file in the build output.
+      # Works for both CRA (build/) and Vite (dist/) output.
+      - name: Rewrite absolute asset paths to relative
+        run: |
+          BUILD_DIR="${{ vars.BUILD_DIR || 'dist' }}"   # override via repo var
+          echo "Rewriting paths in: $BUILD_DIR"
+          find "$BUILD_DIR" -name "*.html" -print0 | \
+            xargs -0 sed -i \
+              -e 's|src="/js/|src="js/|g' \
+              -e 's|href="/js/|href="js/|g' \
+              -e 's|src="/css/|src="css/|g' \
+              -e 's|href="/css/|href="css/|g' \
+              -e 's|src="/assets/|src="assets/|g' \
+              -e 's|href="/assets/|href="assets/|g' \
+              -e 's|src="/static/|src="static/|g' \
+              -e 's|href="/static/|href="static/|g'
+          echo "Done."
+      # ──────────────────────────────────────────────────────────────────
+
+      - name: Upload build artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ vars.BUILD_DIR || 'dist' }}   # CRA uses 'build'
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
