@@ -50,7 +50,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload bundles as artifact
+      - name: Upload bundles
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: tauri-${{ matrix.os }}
@@ -60,32 +61,29 @@ jobs:
   release-nightly:
     name: Update Nightly Pre-release
     needs: build
-    # Only run on push to main, not on PRs
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download all artifacts
+      - name: Download all available artifacts
         uses: actions/download-artifact@v4
         with:
           path: bundles/
+          pattern: tauri-*
           merge-multiple: false
 
-      - name: Delete & recreate Nightly release
+      - name: Publish Nightly
         uses: ncipollo/release-action@v1
         with:
           tag: nightly
-          name: "Nightly"
+          name: Nightly
           prerelease: true
           allowUpdates: true
           removeArtifacts: true
           replacesArtifacts: true
-          body: |
-            **Nightly build** — automatically updated on every push to `main`.
-            
-            Commit: ${{ github.sha }}
-            Built: ${{ github.run_id }}
           artifacts: "bundles/**/*"
+          body: |
+            Nightly build from `${{ github.sha }}`.
           token: ${{ secrets.GITHUB_TOKEN }}
