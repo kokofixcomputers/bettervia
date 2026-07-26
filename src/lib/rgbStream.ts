@@ -2,11 +2,11 @@
 // by the `ryodeushii` keymap on NuPhy Air75 V2 / Halo75 V2 (see that
 // keymap's RAW_HID_PROTOCOL.md). This rides alongside VIA on the same
 // USB HID endpoint via a magic byte (0x77) VIA itself never sends, so it
-// shares ViaDevice's request queue rather than opening a second connection.
+// shares the device's request queue rather than opening a second connection.
 //
 // USB only — does not work over the 2.4GHz dongle or Bluetooth.
 
-import type { ViaDevice } from "./hid";
+import type { ViaProtocol } from "./viaProtocol";
 
 const MAGIC = 0x77;
 
@@ -69,9 +69,9 @@ const MAIN_CHUNK_MAX = 9;
 const SIDE_CHUNK_MAX = 9;
 
 export class RgbStreamClient {
-  private device: ViaDevice;
+  private device: ViaProtocol;
 
-  constructor(device: ViaDevice) {
+  constructor(device: ViaProtocol) {
     this.device = device;
   }
 

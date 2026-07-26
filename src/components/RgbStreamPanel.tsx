@@ -1,12 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ViaDevice } from "../lib/hid";
+import type { ViaProtocol } from "../lib/viaProtocol";
 import { RgbStreamClient, RgbStreamError } from "../lib/rgbStream";
 import type { RgbColor, RgbStreamPong } from "../lib/rgbStream";
+import { isTauri, startTicker, stopTicker, listenRgbTick } from "../lib/tauriHid";
+import type { RgbStreamState } from "../lib/tauriSettings";
 import air75v2Layout from "../data/led_layout_air75v2.json";
 import halo75v2Layout from "../data/led_layout_halo75v2.json";
 
 interface RgbStreamPanelProps {
-  device: ViaDevice | null;
+  device: ViaProtocol | null;
+  /** vendorId:productId of the connected device, when known — used to
+   * persist/restore this exact panel's state across app restarts. Null
+   * disables persistence (browser build, or an unrecognized device). */
+  deviceKey: string | null;
+  /** Reads whatever was last saved for this device, fresh, at the moment
+   * it's called — deliberately a getter rather than a value prop. A plain
+   * prop value only reflects what App.tsx knew at the last render that
+   * changed it (in practice: connect time), so anything that remounts
+   * this component afterward — a Vite HMR reload while editing being the
+   * one that actually bit us — would restore that stale connect-time
+   * snapshot instead of whatever was most recently saved, silently
+   * reverting live edits (e.g. streaming mode flipping back off). Calling
+   * this at detect() time instead always gets the current value. */
+  getSavedState: () => RgbStreamState | undefined;
+  /** Called (debounced) whenever anything worth persisting changes. */
+  onStateChange: (key: string, state: RgbStreamState) => void;
+  /** Explicit "apply this now" request (e.g. from switching Profiles) —
+   * separate from getSavedState so routine auto-saves never themselves
+   * trigger a re-apply (that would spam the device with redundant
+   * host-mode/effect-select commands on every edit). Only reacts when
+   * `token` changes. */
+  applyRequest?: { token: number; state: RgbStreamState } | null;
 }
 
 type SupportState = "idle" | "checking" | "supported" | "unsupported";
@@ -73,7 +97,13 @@ function cloneFrame(f: Frame): Frame {
   return { main: f.main.map((c) => ({ ...c })), side: f.side.map((c) => ({ ...c })) };
 }
 
-export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
+export default function RgbStreamPanel({
+  device,
+  deviceKey,
+  getSavedState,
+  onStateChange,
+  applyRequest,
+}: RgbStreamPanelProps) {
   const client = useMemo(() => (device ? new RgbStreamClient(device) : null), [device]);
 
   const [support, setSupport] = useState<SupportState>("idle");
@@ -141,6 +171,43 @@ export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
     if (frames.length > 0 && currentFrame >= frames.length) setCurrentFrame(frames.length - 1);
   }, [frames.length, currentFrame]);
 
+  // Applies a saved/profile-provided state to the live device — used both
+  // right after a successful detect (restoring whatever was running when
+  // the app last closed) and whenever a Profile is applied later while
+  // already connected. Handles turning streaming both on and off.
+  const applyState = useCallback(
+    async (saved: RgbStreamState, p: RgbStreamPong) => {
+      if (!client) return;
+      if (saved.streaming) {
+        setFrames(saved.frames.length > 0 ? saved.frames : [blankFrame(p.mainLedCount, p.sideLedCount)]);
+        setCurrentFrame(Math.min(saved.currentFrame, Math.max(saved.frames.length - 1, 0)));
+        setFrameMs(saved.frameMs);
+        setBrightness(saved.brightness);
+        setSideBrightness(saved.sideBrightness);
+        try {
+          await client.selectHostStreamEffect();
+          await client.setHostMode(true);
+          if (p.sideLedCount > 0) await client.setSideHostMode(true);
+          await client.setBrightness(saved.brightness);
+          setStreaming(true);
+          setPlaying(saved.playing);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      } else {
+        setPlaying(false);
+        try {
+          await client.setHostMode(false);
+          if (p.sideLedCount > 0) await client.setSideHostMode(false);
+        } catch {
+          // best effort — device may already be in this state
+        }
+        setStreaming(false);
+      }
+    },
+    [client],
+  );
+
   const detect = useCallback(async () => {
     if (!client) return;
     setSupport("checking");
@@ -148,9 +215,15 @@ export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
     try {
       const p = await client.ping();
       setPong(p);
-      setFrames([blankFrame(p.mainLedCount, p.sideLedCount)]);
-      setCurrentFrame(0);
       setSupport("supported");
+
+      const saved = getSavedState();
+      if (saved) {
+        await applyState(saved, p);
+      } else {
+        setFrames([blankFrame(p.mainLedCount, p.sideLedCount)]);
+        setCurrentFrame(0);
+      }
     } catch (err) {
       setSupport("unsupported");
       setError(
@@ -159,7 +232,28 @@ export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
           : "No response — this requires the `ryodeushii` keymap over a USB cable (not wireless).",
       );
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, applyState]);
+
+  const detectRef = useRef(detect);
+  useEffect(() => {
+    detectRef.current = detect;
+  }, [detect]);
+
+  // Auto-detect the moment a device connects (or this component remounts
+  // for any reason, including a dev-mode hot reload) — reads whatever was
+  // most recently saved via getSavedState(), never a stale snapshot.
+  useEffect(() => {
+    if (client) detectRef.current();
   }, [client]);
+
+  // Re-applies only on an explicit request (e.g. switching Profiles) —
+  // gated on `token` changing, not on content, so it never fires from the
+  // continuous auto-save below.
+  useEffect(() => {
+    if (pong && applyRequest) applyState(applyRequest.state, pong).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyRequest?.token]);
 
   const stopPlayback = useCallback(() => setPlaying(false), []);
 
@@ -229,30 +323,64 @@ export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sideBrightness]);
 
+  // Advances to the next frame and streams it. Shared by both pacing
+  // sources below.
+  const advanceAndPushFrame = useCallback(() => {
+    if (!client) return;
+    setCurrentFrame((prevIdx) => {
+      const fs = framesRef.current;
+      if (fs.length === 0) return prevIdx;
+      const nextIdx = (prevIdx + 1) % fs.length;
+      const f = fs[nextIdx];
+      client
+        .setLedChunk(0, f.main)
+        .then(() => client.commit())
+        .catch(() => undefined);
+      if (f.side.length > 0) {
+        const scaled = f.side.map((c) => scaleColor(c, sideBrightnessRef.current));
+        client
+          .setSideLedChunk(0, scaled)
+          .then(() => client.sideCommit())
+          .catch(() => undefined);
+      }
+      return nextIdx;
+    });
+  }, [client]);
+
+  const advanceAndPushFrameRef = useRef(advanceAndPushFrame);
+  useEffect(() => {
+    advanceAndPushFrameRef.current = advanceAndPushFrame;
+  }, [advanceAndPushFrame]);
+
   // Playback loop: advances currentFrame and streams that frame, looping
   // forever until stopped. Restarts cleanly whenever speed changes.
+  //
+  // Under Tauri this is paced by a native OS-thread timer instead of a JS
+  // setInterval — WKWebView throttles setInterval/setTimeout once the
+  // window loses focus or is occluded (the same background-tab throttling
+  // Safari applies), which would otherwise make the animation visibly slow
+  // down and eventually stall while the window isn't focused. The native
+  // ticker just emits an event on a fixed native-thread schedule; only the
+  // actual frame push (still plain JS/HID calls) happens in response.
   useEffect(() => {
     if (!playing || !client) return;
-    const id = setInterval(() => {
-      setCurrentFrame((prevIdx) => {
-        const fs = framesRef.current;
-        if (fs.length === 0) return prevIdx;
-        const nextIdx = (prevIdx + 1) % fs.length;
-        const f = fs[nextIdx];
-        client
-          .setLedChunk(0, f.main)
-          .then(() => client.commit())
-          .catch(() => undefined);
-        if (f.side.length > 0) {
-          const scaled = f.side.map((c) => scaleColor(c, sideBrightnessRef.current));
-          client
-            .setSideLedChunk(0, scaled)
-            .then(() => client.sideCommit())
-            .catch(() => undefined);
-        }
-        return nextIdx;
+
+    if (isTauri()) {
+      let unlisten: (() => void) | undefined;
+      let cancelled = false;
+      startTicker(frameMs);
+      listenRgbTick(() => advanceAndPushFrameRef.current()).then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
       });
-    }, frameMs);
+      return () => {
+        cancelled = true;
+        stopTicker();
+        unlisten?.();
+      };
+    }
+
+    const id = setInterval(() => advanceAndPushFrameRef.current(), frameMs);
     return () => clearInterval(id);
   }, [playing, frameMs, client]);
 
@@ -382,6 +510,17 @@ export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
     setCurrentFrame((i) => i + 1);
   }, [pong, brushColor, frames, currentFrame, stopPlayback]);
 
+  /** Wipes the whole animation back to a single blank frame — removes every
+   * extra frame, not just zeroing out the colors inside them. */
+  const clearAllFrames = useCallback(() => {
+    if (!pong) return;
+    stopPlayback();
+    const blank = blankFrame(pong.mainLedCount, pong.sideLedCount);
+    setFrames([blank]);
+    setCurrentFrame(0);
+    pushFrame(blank.main, blank.side);
+  }, [pong, stopPlayback, pushFrame]);
+
   const refreshBattery = useCallback(async () => {
     if (!client) return;
     try {
@@ -390,6 +529,30 @@ export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
       // ignore
     }
   }, [client]);
+
+  // Continuously auto-save the live state (debounced), so closing and
+  // reopening the app resumes exactly where things were left, instead of
+  // needing "Detect Support" and the animation set up again from scratch.
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!deviceKey || support !== "supported") return;
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(() => {
+      onStateChange(deviceKey, {
+        streaming,
+        playing,
+        frames,
+        currentFrame,
+        frameMs,
+        brightness,
+        sideBrightness,
+      });
+    }, 400);
+    return () => {
+      if (persistTimer.current) clearTimeout(persistTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceKey, support, streaming, playing, frames, currentFrame, frameMs, brightness, sideBrightness]);
 
   if (!device || !client) {
     return <div className="menu-panel menu-panel--disconnected">Connect a device to try RGB streaming.</div>;
@@ -460,6 +623,13 @@ export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
                 </div>
               </div>
             )}
+
+            {!streaming && (
+              <div className="rgb-stream__hint">
+                Turn on <strong>Streaming mode</strong> above to start painting your keyboard's LEDs —
+                the pattern editor only appears once it's on.
+              </div>
+            )}
           </>
         )}
       </section>
@@ -523,6 +693,9 @@ export default function RgbStreamPanel({ device }: RgbStreamPanelProps) {
               </label>
               <button className="pill-btn" type="button" onClick={insertChaseFrames}>
                 Generate Chase
+              </button>
+              <button className="pill-btn pill-btn--danger" type="button" onClick={clearAllFrames}>
+                Clear All Frames
               </button>
             </div>
 

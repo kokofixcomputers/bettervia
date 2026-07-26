@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ViaMenuItem } from "../types/via";
 import { buildMenuTree, evaluateShowIf, flattenControls } from "../lib/menu";
 import type { MenuControl, MenuGroup } from "../lib/menu";
-import type { ViaDevice } from "../lib/hid";
+import type { ViaProtocol } from "../lib/viaProtocol";
 
 interface MenuPanelProps {
   menu: ViaMenuItem;
-  device: ViaDevice | null;
+  device: ViaProtocol | null;
 }
 
 // Ports QMK's exact hsv_to_rgb_impl (quantum/color.c) byte-for-byte, rather
