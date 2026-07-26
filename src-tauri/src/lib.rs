@@ -3,7 +3,6 @@ mod settings;
 mod ticker;
 
 use hid::HidState;
-use tauri::Manager;
 use ticker::TickerState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -20,12 +19,6 @@ pub fn run() {
         )?;
       }
       hid::spawn_hotplug_watcher(app.handle().clone());
-
-      #[cfg(debug_assertions)]
-      if let Some(window) = app.get_webview_window("main") {
-        window.open_devtools();
-      }
-
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![

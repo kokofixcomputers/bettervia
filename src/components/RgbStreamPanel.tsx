@@ -179,8 +179,10 @@ export default function RgbStreamPanel({
     async (saved: RgbStreamState, p: RgbStreamPong) => {
       if (!client) return;
       if (saved.streaming) {
-        setFrames(saved.frames.length > 0 ? saved.frames : [blankFrame(p.mainLedCount, p.sideLedCount)]);
-        setCurrentFrame(Math.min(saved.currentFrame, Math.max(saved.frames.length - 1, 0)));
+        const restoredFrames = saved.frames.length > 0 ? saved.frames : [blankFrame(p.mainLedCount, p.sideLedCount)];
+        const restoredIdx = Math.min(saved.currentFrame, Math.max(restoredFrames.length - 1, 0));
+        setFrames(restoredFrames);
+        setCurrentFrame(restoredIdx);
         setFrameMs(saved.frameMs);
         setBrightness(saved.brightness);
         setSideBrightness(saved.sideBrightness);
@@ -189,6 +191,18 @@ export default function RgbStreamPanel({
           await client.setHostMode(true);
           if (p.sideLedCount > 0) await client.setSideHostMode(true);
           await client.setBrightness(saved.brightness);
+          // Enabling host mode alone doesn't push any pixels — without
+          // this, the LEDs stay whatever they were (usually just off)
+          // until something happens to trigger a send, like an edit or
+          // the next animation tick. Push the restored frame immediately
+          // so streaming actually looks "on" the instant it's restored.
+          const shown = restoredFrames[restoredIdx];
+          await client.setLedChunk(0, shown.main);
+          await client.commit();
+          if (p.sideLedCount > 0) {
+            await client.setSideLedChunk(0, shown.side.map((c) => scaleColor(c, saved.sideBrightness)));
+            await client.sideCommit();
+          }
           setStreaming(true);
           setPlaying(saved.playing);
         } catch (err) {

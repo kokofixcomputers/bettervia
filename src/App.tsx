@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { IconKeymap, IconBulb, IconWave, IconLayers, IconBook, IconPlug, IconDownload, IconUpload, IconBattery } from "./components/icons";
+import { IconKeymap, IconBulb, IconWave, IconLayers, IconBook, IconPlug, IconDownload, IconUpload, IconBattery, AppIcon } from "./components/icons";
 import { RgbStreamClient } from "./lib/rgbStream";
 import type { ViaDefinition, LayoutKey } from "./types/via";
 import { parseKleLayout } from "./lib/kle";
@@ -484,7 +484,7 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar__brand">
-          <span className="sidebar__logo">⬡</span>
+          <AppIcon size={28} className="sidebar__logo" />
           <span>Keycap</span>
         </div>
 

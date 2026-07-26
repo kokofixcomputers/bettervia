@@ -1,8 +1,34 @@
 // Small, consistent line icons for the sidebar nav — plain inline SVG,
 // no icon-library dependency. 20x20, stroke = currentColor.
 
+import { useMemo } from "react";
+
 type IconProps = { className?: string };
 const base = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+
+let appIconGradientId = 0;
+
+/** The app's own logo (matches the generated Tauri app icon / favicon.svg —
+ * same gradient rounded square + "K" glyph) rendered inline so it stays
+ * crisp at sidebar size without an extra image request. */
+export function AppIcon({ size = 28, className }: { size?: number; className?: string }) {
+  const id = useMemo(() => `app-icon-g-${appIconGradientId++}`, []);
+  return (
+    <svg viewBox="0 0 1024 1024" width={size} height={size} className={className}>
+      <defs>
+        <linearGradient id={id} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#7c5cff" />
+          <stop offset="100%" stopColor="#34d399" />
+        </linearGradient>
+      </defs>
+      <rect x="40" y="40" width="944" height="944" rx="220" fill={`url(#${id})`} />
+      <path
+        d="M382 328c17.7 0 32 14.3 32 32v120.7l137.4-142.7c12.3-12.8 32.6-13.1 45.3-.9s13.1 32.6.9 45.3L473.8 512l123.8 129.6c12.2 12.7 11.7 33-1 45.3s-33 11.7-45.3-1L414 543.3V664c0 17.7-14.3 32-32 32s-32-14.3-32-32V360c0-17.7 14.3-32 32-32z"
+        fill="#ffffff"
+      />
+    </svg>
+  );
+}
 
 export function IconKeymap({ className }: IconProps) {
   return (
